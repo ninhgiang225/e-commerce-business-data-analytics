@@ -8,195 +8,248 @@ from utils.charts import base_layout, fmt_currency, fmt_number, PALETTE
 def render(full_df: pd.DataFrame, filtered_df: pd.DataFrame) -> None:
     st.markdown("## 🎁 Promo Insight — Free Gift Analysis")
 
-    st.markdown("""
-    <div class="insight-box">
-        <b>Finding:</b> Brand 2 and Brand 3 bundle a free <b>Category 8</b> item with orders
-        as an ongoing promotion. Evidence: 92 zero-value rows concentrated in Brand 2/3 × Category 8,
-        spread across the full date range (~1 per unique customer), with no single-day spike.
-        <br><br>
-        <b>Key question:</b> Did customers who received the free gift spend more on paid items?
-        If yes, the promo is driving upsell — it earns its cost.
-    </div>
-    """, unsafe_allow_html=True)
-
-    # ── Isolate promo vs non-promo orders ────────────────────────────────────
-    revenue_df = full_df[full_df["gross_item_value"] > 0].copy()
-
+    # ── Shared setup ──────────────────────────────────────────────────────────
+    revenue_df      = full_df[full_df["gross_item_value"] > 0].copy()
     promo_order_ids = full_df[full_df["is_promo_zero"]]["order_id"].unique()
 
-    orders_with_promo    = revenue_df[revenue_df["order_id"].isin(promo_order_ids)]
-    orders_without_promo = revenue_df[~revenue_df["order_id"].isin(promo_order_ids)]
+    promo_customers = (
+        full_df[full_df["is_promo_zero"]][["customer_id", "order_date"]]
+        .rename(columns={"order_date": "promo_date"})
+        .groupby("customer_id")["promo_date"]
+        .min()
+        .reset_index()
+    )
+    promo_customer_ids = set(promo_customers["customer_id"].unique())
+    n_promo_custs      = len(promo_customer_ids)
 
-    aov_with    = orders_with_promo.groupby("order_id")["gross_item_value"].sum().mean()
-    aov_without = orders_without_promo.groupby("order_id")["gross_item_value"].sum().mean()
-    n_promo     = len(promo_order_ids)
-    n_no_promo  = orders_without_promo["order_id"].nunique()
-    uplift_pct  = (aov_with - aov_without) / aov_without * 100 if aov_without else 0
+    # Customers who returned with a paid non-promo order after their promo date
+    paid_orders = revenue_df[["customer_id", "order_id", "order_date"]].drop_duplicates()
+    behaviour   = paid_orders.merge(promo_customers, on="customer_id", how="inner")
+    behaviour["days_since_promo"] = (behaviour["order_date"] - behaviour["promo_date"]).dt.days
+    returned_df = behaviour[behaviour["days_since_promo"] > 0]
+    n_returned  = returned_df["customer_id"].nunique()
 
-    # ── KPIs ──────────────────────────────────────────────────────────────────
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Promo Orders",          fmt_number(n_promo))
-    c2.metric("Non-promo Orders",      fmt_number(n_no_promo))
-    c3.metric("AOV — With Promo",      fmt_currency(aov_with))
-    c4.metric("AOV — Without Promo",   fmt_currency(aov_without))
+    # Overlap: non-promo paid orders by promo customers placed after promo date
+    overlap_orders = (
+        revenue_df[
+            revenue_df["customer_id"].isin(promo_customer_ids) &
+            ~revenue_df["order_id"].isin(promo_order_ids)
+        ]
+        .merge(promo_customers, on="customer_id", how="left")
+    )
+    overlap_orders["days_after_promo"] = (
+        overlap_orders["order_date"] - overlap_orders["promo_date"]
+    ).dt.days
+    overlap_orders = overlap_orders[overlap_orders["days_after_promo"] > 0]
+
+    n_overlap_custs = overlap_orders["customer_id"].nunique()
+    overlap_rate    = n_overlap_custs / n_promo_custs * 100 if n_promo_custs else 0
+    overlap_rev     = overlap_orders["gross_item_value"].sum()
+
+    # CLV
+    promo_clv         = revenue_df[revenue_df["customer_id"].isin(promo_customer_ids)].groupby("customer_id")["gross_item_value"].sum()
+    non_promo_clv     = revenue_df[~revenue_df["customer_id"].isin(promo_customer_ids)].groupby("customer_id")["gross_item_value"].sum()
+    avg_promo_clv     = promo_clv.mean() if len(promo_clv) else 0
+    avg_non_promo_clv = non_promo_clv.mean() if len(non_promo_clv) else 0
+    clv_lift_pct      = (avg_promo_clv - avg_non_promo_clv) / avg_non_promo_clv * 100 if avg_non_promo_clv else 0
+
+    # Basket data (paid items only, zero-value gift excluded)
+    promo_paid     = revenue_df[revenue_df["order_id"].isin(promo_order_ids)].copy()
+    non_promo_paid = revenue_df[~revenue_df["order_id"].isin(promo_order_ids)].copy()
+    avg_item_promo     = promo_paid["gross_item_value"].mean()
+    avg_item_non_promo = non_promo_paid["gross_item_value"].mean()
+    item_lift_pct      = (avg_item_promo - avg_item_non_promo) / avg_item_non_promo * 100 if avg_item_non_promo else 0
+
+    # Time-to-next-purchase
+    all_orders = (
+        revenue_df[["customer_id", "order_id", "order_date"]]
+        .drop_duplicates()
+        .sort_values(["customer_id", "order_date"])
+    )
+    all_orders["prev_order_date"] = all_orders.groupby("customer_id")["order_date"].shift(1)
+    all_orders["interval_days"]   = (all_orders["order_date"] - all_orders["prev_order_date"]).dt.days
+    intervals = all_orders.dropna(subset=["interval_days"])
+    intervals["is_promo_customer"] = intervals["customer_id"].isin(promo_customer_ids)
+    promo_intervals     = intervals[intervals["is_promo_customer"]]["interval_days"]
+    non_promo_intervals = intervals[~intervals["is_promo_customer"]]["interval_days"]
+    avg_promo_int     = promo_intervals.mean() if len(promo_intervals) else 0
+    avg_non_promo_int = non_promo_intervals.mean() if len(non_promo_intervals) else 0
+    interval_diff     = avg_promo_int - avg_non_promo_int
+
+    # ── 4 KPI cards ───────────────────────────────────────────────────────────
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Promo Customers",         fmt_number(n_promo_custs))
+    k2.metric("Made Non-promo Purchase", fmt_number(n_overlap_custs))
+    k3.metric("Return Rate",             f"{overlap_rate:.1f}%")
+    k4.metric("Revenue from Returning",  fmt_currency(overlap_rev))
 
     st.markdown("---")
 
+    # ── Row 1: CLV histogram  |  Return frequency bar ─────────────────────────
     col_a, col_b = st.columns(2)
 
-    # ── AOV comparison bar ────────────────────────────────────────────────────
     with col_a:
-        st.markdown('<p class="section-title">AOV: Promo vs No Promo</p>', unsafe_allow_html=True)
-        fig = go.Figure(go.Bar(
-            x=["With Free Gift", "Without Free Gift"],
-            y=[aov_with, aov_without],
-            marker_color=[PALETTE[0], PALETTE[1]],
-            opacity=0.8,
-            text=[fmt_currency(aov_with), fmt_currency(aov_without)],
-            textposition="outside",
-        ))
-        fig.update_layout(title="Average Order Value by Promo Status")
-        fig.update_yaxes(tickprefix="$", tickformat=",.0f")
-        base_layout(fig, height=280)
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.markdown('<p class="section-title">Lifetime Spend: Promo vs Non-promo Customers</p>',
+                    unsafe_allow_html=True)
 
-    # ── Spend distribution overlay ────────────────────────────────────────────
-    with col_b:
-        st.markdown('<p class="section-title">Spend Distribution Comparison</p>', unsafe_allow_html=True)
-
-        spend_with    = orders_with_promo.groupby("order_id")["gross_item_value"].sum()
-        spend_without = orders_without_promo.groupby("order_id")["gross_item_value"].sum()
-
-        p99 = max(spend_with.quantile(0.99), spend_without.quantile(0.99))
-
-        fig2 = go.Figure()
-        fig2.add_trace(go.Histogram(
-            x=spend_without[spend_without <= p99],
-            nbinsx=30,
-            name="Without Promo",
-            marker_color=PALETTE[1],
-            opacity=0.6,
-        ))
-        fig2.add_trace(go.Histogram(
-            x=spend_with[spend_with <= p99],
-            nbinsx=30,
-            name="With Promo",
-            marker_color=PALETTE[0],
-            opacity=0.6,
-        ))
-        fig2.update_layout(
-            title="Order Spend Distribution (1st–99th pct)",
-            barmode="overlay",
+        p99_clv = max(
+            promo_clv.quantile(0.99) if len(promo_clv) else 0,
+            non_promo_clv.quantile(0.99) if len(non_promo_clv) else 0,
         )
-        fig2.update_xaxes(tickprefix="$", tickformat=",.0f", title="Order Value ($)")
-        fig2.update_yaxes(title="Count")
-        base_layout(fig2, height=280)
-        st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
+        fig_clv = go.Figure()
+        fig_clv.add_trace(go.Histogram(
+            x=non_promo_clv[non_promo_clv <= p99_clv],
+            nbinsx=30, name="Non-promo customers",
+            marker_color=PALETTE[1], opacity=0.6,
+        ))
+        fig_clv.add_trace(go.Histogram(
+            x=promo_clv[promo_clv <= p99_clv],
+            nbinsx=30, name="Promo customers",
+            marker_color=PALETTE[0], opacity=0.75,
+        ))
+        fig_clv.add_vline(x=avg_non_promo_clv, line_dash="dash", line_color=PALETTE[1],
+                          annotation_text=f"Non-promo avg {fmt_currency(avg_non_promo_clv)}",
+                          annotation_position="top left")
+        fig_clv.add_vline(x=avg_promo_clv, line_dash="dash", line_color=PALETTE[0],
+                          annotation_text=f"Promo avg {fmt_currency(avg_promo_clv)}",
+                          annotation_position="top right")
+        fig_clv.update_layout(title="Customer Lifetime Spend Distribution", barmode="overlay")
+        fig_clv.update_xaxes(tickprefix="$", tickformat=",.0f", title="Total Lifetime Spend ($)")
+        fig_clv.update_yaxes(title="Customers")
+        base_layout(fig_clv, height=320)
+        st.plotly_chart(fig_clv, use_container_width=True, config={"displayModeBar": False})
+        st.caption(
+            f"Promo customers avg {fmt_currency(avg_promo_clv)} vs "
+            f"{fmt_currency(avg_non_promo_clv)} non-promo ({clv_lift_pct:+.1f}% difference)."
+        )
+
+    with col_b:
+        st.markdown('<p class="section-title">How Many Times Did Customers Return?</p>',
+                    unsafe_allow_html=True)
+
+        if n_overlap_custs > 0:
+            orders_after = (
+                overlap_orders.groupby("customer_id")["order_id"]
+                .nunique()
+                .value_counts()
+                .reset_index()
+                .rename(columns={"order_id": "num_orders", "count": "customers"})
+                .sort_values("num_orders")
+            )
+            avg_overlap_orders = overlap_orders.groupby("customer_id")["order_id"].nunique().mean()
+
+            fig_freq = go.Figure(go.Bar(
+                x=orders_after["num_orders"].astype(str) + " order(s)",
+                y=orders_after["customers"],
+                marker_color=PALETTE[2], opacity=0.85,
+                text=orders_after["customers"], textposition="outside",
+            ))
+            fig_freq.update_layout(
+                title=f"Non-promo Orders Placed by {n_overlap_custs} Returning Customers",
+            )
+            fig_freq.update_xaxes(title="Non-promo Orders After Receiving Gift")
+            fig_freq.update_yaxes(title="Customers")
+            base_layout(fig_freq, height=320)
+            st.plotly_chart(fig_freq, use_container_width=True, config={"displayModeBar": False})
+            st.caption(f"Avg {avg_overlap_orders:.1f} non-promo orders per overlap customer.")
+        else:
+            st.info("No promo customers placed a subsequent non-promo order in this date range.")
 
     st.markdown("---")
 
-    # ── Customer behaviour after promo ────────────────────────────────────────
-    st.markdown('<p class="section-title">Customer Behaviour After Receiving Free Gift</p>',
-                unsafe_allow_html=True)
-
-    st.markdown("""
-    <div class="insight-box">
-        Did customers who received the free gift come back and buy again?
-        We identify customers who had a promo order, then check whether they placed
-        a <b>subsequent paid order</b> after that date.
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Customers who got the promo
-    promo_customers = full_df[full_df["is_promo_zero"]][["customer_id", "order_date"]].copy()
-    promo_customers = promo_customers.rename(columns={"order_date": "promo_date"})
-    promo_customers = promo_customers.groupby("customer_id")["promo_date"].min().reset_index()
-
-    # All paid orders
-    paid_orders = revenue_df[["customer_id", "order_id", "order_date"]].drop_duplicates()
-
-    # Join and find orders AFTER the promo date
-    behaviour = paid_orders.merge(promo_customers, on="customer_id", how="inner")
-    behaviour["days_since_promo"] = (behaviour["order_date"] - behaviour["promo_date"]).dt.days
-
-    returned_df   = behaviour[behaviour["days_since_promo"] > 0]
-    n_promo_custs = promo_customers["customer_id"].nunique()
-    n_returned    = returned_df["customer_id"].nunique()
-    return_rate   = n_returned / n_promo_custs * 100 if n_promo_custs else 0
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Customers Received Promo",  fmt_number(n_promo_custs))
-    c2.metric("Returned to Buy Again",     fmt_number(n_returned))
-    c3.metric("Post-Promo Return Rate",    f"{return_rate:.1f}%")
-
+    # ── Row 2: Category revenue share  |  Days to return ─────────────────────
     col_c, col_d = st.columns(2)
 
-    # ── Days to return distribution ───────────────────────────────────────────
     with col_c:
-        st.markdown('<p class="section-title">Days from Promo to Next Purchase</p>',
+        st.markdown('<p class="section-title">Category Revenue Share — Promo vs Non-promo</p>',
                     unsafe_allow_html=True)
 
-        first_return = (
-            returned_df.groupby("customer_id")["days_since_promo"]
-            .min()
-            .reset_index()
+        cat_col = "product_group" if "product_group" in revenue_df.columns else "brand"
+
+        promo_cat = (
+            promo_paid.groupby(cat_col)["gross_item_value"].sum()
+            .rename("promo_rev").reset_index().rename(columns={cat_col: "category"})
         )
-        fig3 = go.Figure(go.Histogram(
-            x=first_return["days_since_promo"],
-            nbinsx=25,
-            marker_color=PALETTE[2],
-            opacity=0.8,
-        ))
-        avg_days = first_return["days_since_promo"].mean()
-        fig3.add_vline(x=avg_days, line_dash="dash", line_color=PALETTE[3],
-                       annotation_text=f"Avg {avg_days:.0f} days",
-                       annotation_position="top right")
-        fig3.update_layout(title="How Quickly Did Customers Return?")
-        fig3.update_xaxes(title="Days After Promo")
-        fig3.update_yaxes(title="Customers")
-        base_layout(fig3, height=280)
-        st.plotly_chart(fig3, use_container_width=True, config={"displayModeBar": False})
+        non_promo_cat = (
+            non_promo_paid.groupby(cat_col)["gross_item_value"].sum()
+            .rename("non_promo_rev").reset_index().rename(columns={cat_col: "category"})
+        )
+        cat_mix = promo_cat.merge(non_promo_cat, on="category", how="outer").fillna(0)
+        cat_mix["promo_share"]     = cat_mix["promo_rev"] / cat_mix["promo_rev"].sum() * 100
+        cat_mix["non_promo_share"] = cat_mix["non_promo_rev"] / cat_mix["non_promo_rev"].sum() * 100
+        cat_mix["total"]           = cat_mix["promo_rev"] + cat_mix["non_promo_rev"]
+        cat_mix = cat_mix.nlargest(10, "total").sort_values("promo_share")
 
-    # ── Revenue from returning vs non-returning promo customers ──────────────
+        fig_cat = go.Figure()
+        fig_cat.add_trace(go.Bar(
+            y=cat_mix["category"].astype(str), x=cat_mix["non_promo_share"],
+            name="Non-promo", orientation="h", marker_color=PALETTE[1], opacity=0.75,
+        ))
+        fig_cat.add_trace(go.Bar(
+            y=cat_mix["category"].astype(str), x=cat_mix["promo_share"],
+            name="Promo (excl. gift)", orientation="h", marker_color=PALETTE[0], opacity=0.75,
+        ))
+        fig_cat.update_layout(
+            title="Revenue Share by Category (top 10, paid items only)",
+            barmode="group",
+        )
+        fig_cat.update_xaxes(title="Share of Revenue (%)", ticksuffix="%")
+        base_layout(fig_cat, height=320)
+        st.plotly_chart(fig_cat, use_container_width=True, config={"displayModeBar": False})
+
     with col_d:
-        st.markdown('<p class="section-title">Revenue: Returning vs Non-returning Promo Customers</p>',
+        st.markdown('<p class="section-title">How Quickly Did Customers Return?</p>',
                     unsafe_allow_html=True)
 
-        returning_ids     = returned_df["customer_id"].unique()
-        non_returning_ids = promo_customers[
-            ~promo_customers["customer_id"].isin(returning_ids)
-        ]["customer_id"].unique()
+        if n_returned > 0:
+            first_return = (
+                returned_df.groupby("customer_id")["days_since_promo"]
+                .min().reset_index()
+            )
+            avg_days = first_return["days_since_promo"].mean()
 
-        rev_returning     = revenue_df[revenue_df["customer_id"].isin(returning_ids)]["gross_item_value"].sum()
-        rev_non_returning = revenue_df[revenue_df["customer_id"].isin(non_returning_ids)]["gross_item_value"].sum()
+            fig_ret = go.Figure(go.Histogram(
+                x=first_return["days_since_promo"],
+                nbinsx=25,
+                marker_color=PALETTE[2],
+                opacity=0.8,
+            ))
+            fig_ret.add_vline(x=avg_days, line_dash="dash", line_color=PALETTE[3],
+                              annotation_text=f"Avg {avg_days:.0f} days",
+                              annotation_position="top right")
+            fig_ret.update_layout(title="Days from Promo to Next Purchase")
+            fig_ret.update_xaxes(title="Days After Promo")
+            fig_ret.update_yaxes(title="Customers")
+            base_layout(fig_ret, height=320)
+            st.plotly_chart(fig_ret, use_container_width=True, config={"displayModeBar": False})
+        else:
+            st.info("No promo customers placed a return order in this date range.")
 
-        fig4 = go.Figure(go.Bar(
-            x=["Returned After Promo", "Did Not Return"],
-            y=[rev_returning, rev_non_returning],
-            marker_color=[PALETTE[0], PALETTE[5]],
-            opacity=0.8,
-            text=[fmt_currency(rev_returning), fmt_currency(rev_non_returning)],
-            textposition="outside",
-        ))
-        fig4.update_layout(title="Total Revenue by Post-Promo Behaviour")
-        fig4.update_yaxes(tickprefix="$", tickformat=",.0f")
-        base_layout(fig4, height=280)
-        st.plotly_chart(fig4, use_container_width=True, config={"displayModeBar": False})
-
-    # ── Summary verdict ───────────────────────────────────────────────────────
+    # ── Verdict ───────────────────────────────────────────────────────────────
     st.markdown("---")
-    if uplift_pct > 5:
-        verdict = f"✅ Promo appears effective — orders with a free gift show <b>{uplift_pct:.1f}% higher AOV</b>. The promotion is likely driving upsell or attracting higher-intent buyers."
-    elif uplift_pct > 0:
-        verdict = f"⚠️ Marginal uplift — orders with a free gift show only <b>{uplift_pct:.1f}% higher AOV</b>. Monitor over a longer period before drawing conclusions."
+
+    signals = []
+    if overlap_rate >= 20:
+        signals.append(f"✅ <b>{overlap_rate:.0f}%</b> of promo customers converted to repeat non-promo buyers — strong CLV signal.")
+    elif overlap_rate > 0:
+        signals.append(f"⚠️ Only <b>{overlap_rate:.0f}%</b> of promo customers converted to non-promo buyers.")
     else:
-        verdict = f"❌ No positive uplift detected — promo orders have <b>{abs(uplift_pct):.1f}% lower AOV</b>. The free gift may be attracting low-intent buyers or cannibalising full-price sales."
+        signals.append("❌ No promo customers made a subsequent non-promo purchase in this period.")
+
+
+    any_positive = any("✅" in s for s in signals)
+    recommendation = (
+        "Overall signals are positive. The free gift appears to be earning its cost by converting "
+        "recipients into repeat buyers with higher lifetime value."
+        if any_positive else
+        "Consider A/B testing the promo against a discount-equivalent offer to isolate the "
+        "free-gift effect from price sensitivity."
+    )
 
     st.markdown(f"""
     <div class="insight-box">
-        <b>Promo Effectiveness Verdict</b><br>
-        {verdict}<br><br>
-        <b>Return behaviour:</b> {return_rate:.1f}% of customers who received a free gift
-        placed a subsequent paid order, with an average of {avg_days:.0f} days before returning.
+        <b>Verdict</b><br><br>
+        {"<br>".join(f"&nbsp;&nbsp;{s}" for s in signals)}<br><br>
+        {recommendation}
     </div>
     """, unsafe_allow_html=True)
