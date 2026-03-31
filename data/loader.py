@@ -1,86 +1,43 @@
-"""Data loading, parsing and joining — all caching lives here."""
-from pathlib import Path
-
 import pandas as pd
 import streamlit as st
+from pathlib import Path
 
-DATA_DIR = Path(__file__).parent.parent / "data_files"
+REQUIRED_COLS = [
+    "brand", "item_id", "gross_item_value", "order_date", "order_datetime",
+    "product_id", "order_id", "customer_id", "product_group", "country", "state",
+]
 
-# ── Column name constants ─────────────────────────────────────────────────────
-COL_CUSTOMER_ID   = "customer_id"
-COL_PRODUCT_ID    = "product_id"
-COL_ORDER_ID      = "order_id"
-COL_ITEM_ID       = "item_id"
-COL_ORDER_DATE    = "order_date"
-COL_ORDER_DT      = "order_datetime"
-COL_GROSS_VALUE   = "gross_item_value"
-COL_BRAND         = "brand"
-COL_COUNTRY       = "country"
-COL_STATE         = "state"
-COL_PRODUCT_GROUP = "product_group"
+DATA_PATH = Path(__file__).parent.parent / "data_files" / "master_table.csv"
 
 
-@st.cache_data(ttl=600, show_spinner=False)
-def _load_raw(filename: str) -> pd.DataFrame:
-    """Load a single CSV from DATA_DIR.
+@st.cache_data
+def load_data() -> pd.DataFrame:
+    if not DATA_PATH.exists():
+        st.error(f"master_table.csv not found at: {DATA_PATH}")
+        st.stop()
 
-    Args:
-        filename: CSV filename (e.g. 'fct_orders.csv').
+    df = pd.read_csv(DATA_PATH)
 
-    Returns:
-        Raw DataFrame, or empty DataFrame on error.
-    """
-    path = DATA_DIR / filename
-    try:
-        return pd.read_csv(path)
-    except FileNotFoundError:
-        st.error(f"❌ File not found: `{path}`. Place your CSVs in `data_files/`.")
-        return pd.DataFrame()
-    except Exception as exc:  # noqa: BLE001
-        st.error(f"❌ Error reading `{filename}`: {exc}")
-        return pd.DataFrame()
+    # ── Parse dates ──────────────────────────────────────────────────────────
+    df["order_date"]     = pd.to_datetime(df["order_date"], infer_datetime_format=True, errors="coerce").dt.normalize()
+    df["order_datetime"] = pd.to_datetime(df["order_datetime"], infer_datetime_format=True, errors="coerce")
 
+    # ── Normalise string cols ─────────────────────────────────────────────────
+    for col in ["brand", "product_group", "country", "state"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip()
 
-@st.cache_data(ttl=600, show_spinner=False)
-def load_all_data() -> dict[str, pd.DataFrame]:
-    """Load, parse and join all three CSVs.
+    # ── customer_id: scientific notation fix ─────────────────────────────────
+    if df["customer_id"].dtype == float:
+        df["customer_id"] = df["customer_id"].astype("Int64").astype(str)
 
-    Returns:
-        Dict with keys 'orders', 'customers', 'products'.
-        'orders' is the enriched fact table joined with both dimensions.
-    """
-    orders    = _load_raw("fct_orders.csv")
-    customers = _load_raw("dim_customers.csv")
-    products  = _load_raw("dim_products.csv")
+    # ── Data-quality flags ───────────────────────────────────────────────────
+    df["is_promo_zero"] = (
+        (df["gross_item_value"] == 0.0) &
+        (df["brand"].isin(["Brand 2", "Brand 3"])) &
+        (df["product_group"] == "Category 8")
+    )
+    df["is_data_error"] = df["gross_item_value"] < 0
+    df["value_clean"]   = df["gross_item_value"].clip(lower=0)  # used in visualisations
 
-    if orders.empty:
-        return {"orders": pd.DataFrame(), "customers": customers, "products": products}
-
-    # ── Parse datetimes ───────────────────────────────────────────────────────
-    if COL_ORDER_DT in orders.columns:
-        orders[COL_ORDER_DT] = pd.to_datetime(orders[COL_ORDER_DT], errors="coerce")
-
-    if COL_ORDER_DATE in orders.columns:
-        orders[COL_ORDER_DATE] = pd.to_datetime(orders[COL_ORDER_DATE], errors="coerce")
-    elif COL_ORDER_DT in orders.columns:
-        orders[COL_ORDER_DATE] = orders[COL_ORDER_DT].dt.normalize()
-
-    # ── Derived time columns (needed for Q4) ──────────────────────────────────
-    if COL_ORDER_DT in orders.columns:
-        orders["day_of_week"] = orders[COL_ORDER_DT].dt.day_name()
-        orders["hour_of_day"] = orders[COL_ORDER_DT].dt.hour
-    elif COL_ORDER_DATE in orders.columns:
-        orders["day_of_week"] = orders[COL_ORDER_DATE].dt.day_name()
-
-    # ── Numeric coercion ──────────────────────────────────────────────────────
-    if COL_GROSS_VALUE in orders.columns:
-        orders[COL_GROSS_VALUE] = pd.to_numeric(orders[COL_GROSS_VALUE], errors="coerce").fillna(0.0)
-
-    # ── Join dimensions ───────────────────────────────────────────────────────
-    if not customers.empty and COL_CUSTOMER_ID in orders.columns:
-        orders = orders.merge(customers, on=COL_CUSTOMER_ID, how="left")
-
-    if not products.empty and COL_PRODUCT_ID in orders.columns:
-        orders = orders.merge(products, on=COL_PRODUCT_ID, how="left")
-
-    return {"orders": orders, "customers": customers, "products": products}
+    return df
