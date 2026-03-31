@@ -6,7 +6,7 @@ from utils.charts import base_layout, fmt_currency, fmt_number, PALETTE
 
 
 def render(full_df: pd.DataFrame, filtered_df: pd.DataFrame) -> None:
-    st.markdown("## 🎁 Promo Insight — Free Gift Analysis")
+    st.markdown("## Promo Insight — Free Gift Analysis")
 
     # ── Shared setup ──────────────────────────────────────────────────────────
     revenue_df      = full_df[full_df["gross_item_value"] > 0].copy()
@@ -230,11 +230,11 @@ def render(full_df: pd.DataFrame, filtered_df: pd.DataFrame) -> None:
 
     signals = []
     if overlap_rate >= 20:
-        signals.append(f"✅ <b>{overlap_rate:.0f}%</b> of promo customers converted to repeat non-promo buyers — strong CLV signal.")
+        signals.append(f"<b>{overlap_rate:.0f}%</b> of promo customers converted to repeat non-promo buyers — strong CLV signal.")
     elif overlap_rate > 0:
-        signals.append(f"⚠️ Only <b>{overlap_rate:.0f}%</b> of promo customers converted to non-promo buyers.")
+        signals.append(f" Only <b>{overlap_rate:.0f}%</b> of promo customers converted to non-promo buyers.")
     else:
-        signals.append("❌ No promo customers made a subsequent non-promo purchase in this period.")
+        signals.append(" No promo customers made a subsequent non-promo purchase in this period.")
 
 
     any_positive = any("✅" in s for s in signals)
@@ -248,7 +248,6 @@ def render(full_df: pd.DataFrame, filtered_df: pd.DataFrame) -> None:
 
     st.markdown(f"""
     <div class="insight-box">
-        <b>Verdict</b><br><br>
         {"<br>".join(f"&nbsp;&nbsp;{s}" for s in signals)}<br><br>
         {recommendation}
     </div>
