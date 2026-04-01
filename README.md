@@ -2,7 +2,7 @@
 
 ## Deliverables
 - 👉 Live App: [streamlit app](https://atomic-e-commerce-analytics.streamlit.app/)
-- 👉 Executive Summary: [a page](https://github.com/ninhgiang225/e-commerce-business-data-analytics/blob/main/docs/Executive%20summary_%20E-commerce%20Performance%20Audit.pdf)
+- 👉 Executive Summary: [a page](https://github.com/ninhgiang225/e-commerce-business-data-analytics/blob/main/docs/Executive%20summary_%20E-commerce%20Performance%20Audit%20copy.pdf)
 - 👉 Data Quality check: [notebook](https://github.com/ninhgiang225/e-commerce-business-data-analytics/blob/main/notebooks/data_quality_check.ipynb)
    
 <img width="1046" height="749" alt="image" src="https://github.com/user-attachments/assets/04765cbb-a0b3-4642-9663-c06324a3cafa" />
