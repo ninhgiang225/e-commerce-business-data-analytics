@@ -1,4 +1,20 @@
 # Atomic Data Analyst Exercise
+<p>
+  <img src="https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white"/>
+  <img src="https://img.shields.io/badge/Pandas-150458?style=for-the-badge&logo=pandas&logoColor=white"/>
+  <img src="https://img.shields.io/badge/NumPy-013243?style=for-the-badge&logo=numpy&logoColor=white"/>
+  <img src="https://img.shields.io/badge/SciPy-8CAAE6?style=for-the-badge&logo=scipy&logoColor=white"/>
+  <img src="https://img.shields.io/badge/Plotly-3F4F75?style=for-the-badge&logo=plotly&logoColor=white"/>
+  <img src="https://img.shields.io/badge/Seaborn-4C9BE8?style=for-the-badge"/>
+  <img src="https://img.shields.io/badge/Matplotlib-11557C?style=for-the-badge"/>
+  <img src="https://img.shields.io/badge/Streamlit-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white"/>
+  <img src="https://img.shields.io/badge/Jupyter-F37626?style=for-the-badge&logo=jupyter&logoColor=white"/>
+  <img src="https://img.shields.io/badge/IQR%20Outlier%20Detection-2BBFB3?style=for-the-badge"/>
+  <img src="https://img.shields.io/badge/Welch's%20t--test-7B5EA7?style=for-the-badge"/>
+  <img src="https://img.shields.io/badge/Winsorization-F5A623?style=for-the-badge"/>
+  <img src="https://img.shields.io/badge/Rolling%20Average-5DB87A?style=for-the-badge"/>
+  <img src="https://img.shields.io/badge/Data%20Quality%20Audit-E8607A?style=for-the-badge"/>
+</p>
 
 ## Deliverables
 - 👉 Live App: [streamlit app](https://atomic-e-commerce-analytics.streamlit.app/)
